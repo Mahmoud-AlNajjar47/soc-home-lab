@@ -1,0 +1,135 @@
+# Incident 01 — WinRM Single Authentication Attempt
+
+## Summary
+A single credential-based authentication attempt was made against an 
+exposed WinRM service (port 5985) following network reconnaissance. 
+Wazuh detected and logged the failed login via Windows Security 
+Event ID 4625.
+
+## Environment
+| Component | Value |
+|---|---|
+| Attacker | Kali Linux 2025.3 (192.168.152.131) |
+| Target | Windows 10 MSEDGEWIN10 (192.168.152.129) |
+| SIEM | Wazuh 4.14.5 (192.168.152.130) |
+| Timestamp | 2026-06-30T08:21:24.497Z |
+
+---
+
+## Step 1 — Reconnaissance
+
+Nmap scan identified exposed services on the target including WinRM 
+(port 5985) and SMB (port 445) — both commonly abused for lateral 
+movement and credential attacks.
+
+**Command:**
+```bash
+nmap -sV -O 192.168.152.129
+```
+
+**Result:**
+```
+PORT     STATE SERVICE       VERSION
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp  open  microsoft-ds?
+5985/tcp open  http          Microsoft HTTPAPI httpd 2.0 (SSDP/UPnP)
+OS details: Microsoft Windows 10 1709 - 22H2
+```
+
+![Nmap Recon](../screenshots/incident01-recon-nmap.png)
+
+---
+
+## Step 2 — Attack Execution
+
+Metasploit's WinRM login scanner was used to attempt authentication 
+against the exposed WinRM service with a single credential pair.
+
+**Commands:**
+```
+use auxiliary/scanner/winrm/winrm_login
+set RHOSTS 192.168.152.129
+set USERNAME IEUser
+set PASSWORD Passw0rd!
+run
+```
+
+**Result:**
+```
+[-] 192.168.152.129: - LOGIN FAILED: WORKSTATION\IEUser:Passw0rd! (Incorrect: )
+[*] Scanned 1 of 1 hosts (100% complete)
+```
+
+![Attack Execution](../screenshots/incident01-attack-execution.png)
+
+---
+
+## Step 3 — Detection
+
+Wazuh captured the failed authentication attempt via Windows Security 
+Event ID 4625, logged by Microsoft-Windows-Security-Auditing.
+
+**Alert details:**
+```json
+{
+  "rule": {
+    "id": "60122",
+    "level": 5,
+    "description": "Logon Failure - Unknown user or bad password",
+    "groups": ["windows", "windows_security", "authentication_failed"],
+    "mitre": {
+      "technique": ["Account Access Removal"],
+      "id": ["T1531"],
+      "tactic": ["Impact"]
+    }
+  },
+  "data": {
+    "win": {
+      "eventdata": {
+        "targetUserName": "IEUser",
+        "targetDomainName": "WORKSTATION",
+        "authenticationPackageName": "NTLM",
+        "logonType": "3",
+        "status": "0xc000006d",
+        "subStatus": "0xc000006a",
+        "workstationName": "zyZwIvEbGukDL"
+      },
+      "system": {
+        "eventID": "4625",
+        "severityValue": "AUDIT_FAILURE",
+        "computer": "MSEDGEWIN10"
+      }
+    }
+  },
+  "timestamp": "2026-06-30T08:21:24.497+0000"
+}
+```
+
+---
+
+## Analysis
+
+**MITRE Mapping Discrepancy:**
+Wazuh's default ruleset mapped this event to **T1531 (Account Access 
+Removal)** under the Impact tactic. This is imprecise — a single failed 
+authentication attempt is more accurately characterized as **T1110 
+(Brute Force)** under Credential Access, or **T1078 (Valid Accounts)** 
+under Initial Access, since no account access was actually removed.
+
+This is a known limitation of out-of-box SIEM rule-to-ATT&CK mappings 
+and highlights the importance of analyst judgment when triaging alerts 
+rather than accepting automated classifications at face value.
+
+**Logon Type 3** confirms this was a network-based authentication 
+attempt, not an interactive login — consistent with remote service 
+exploitation behavior.
+
+**Status codes:**
+- `0xC000006D` — Unknown username or bad password (generic failure)
+- `0xC000006A` — Bad password specifically (sub-status confirms 
+  username IEUser exists but password was wrong)
+
+**Outcome:** Single attempt, no lockout threshold reached. 
+Triage decision: monitor for repeated attempts. No escalation required 
+for isolated single failure.
