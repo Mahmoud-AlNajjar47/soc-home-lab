@@ -116,7 +116,7 @@ identifying the pattern as a brute force attack.
 }
 ```
 
-![Correlation Alert](../screenshots/incident02-wazuh-correlation-alert.png)
+![Correlation Alert](../screenshots/incident02-wazuh-correlation-alert-dashboard.png)
 
 ---
 
